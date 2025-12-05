@@ -1,0 +1,19 @@
+2025-12-04 12:52:21,406 INFO:root:<module>:Sync service starting with rotating file logs (10MB max, 5 backups)
+2025-12-04 12:52:21,413 INFO:sync-service:_init_database:Added 7 sample repositories with filter configurations to database
+2025-12-04 12:52:21,417 INFO:sync-service:_init_database:Database schema initialized
+2025-12-04 12:52:21,423 INFO:apscheduler.scheduler:add_job:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2025-12-04 12:52:21,425 INFO:apscheduler.scheduler:_real_add_job:Added job "Automatic Full Sync" to job store "default"
+2025-12-04 12:52:21,425 INFO:apscheduler.scheduler:start:Scheduler started
+2025-12-04 12:52:21,426 INFO:sync-service:_setup_automatic_sync:Automatic sync scheduler started - running every 2 hours
+2025-12-04 12:52:21,426 INFO:sync-service:__init__:GitHubSyncService initialized with database: data/github_issues.db
+2025-12-04 12:52:21,437 INFO:sync-service:<module>:Starting GitHub Sync Service on port 8000
+2025-12-04 12:52:21,437 INFO:sync-service:<module>:Database path: data/github_issues.db
+2025-12-04 12:52:21,438 INFO:sync-service:<module>:Azure environment: False
+2025-12-04 12:52:21,438 INFO:sync-service:<module>:Requests module available: True
+2025-12-04 12:52:21,460 INFO:werkzeug:_log:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8000
+ * Running on http://192.168.1.187:8000
+2025-12-04 12:52:21,461 INFO:werkzeug:_log:[33mPress CTRL+C to quit[0m
+2025-12-04 12:52:24,580 ERROR:sync-service:get_repositories:Error getting repositories: no such column: repo
+2025-12-04 12:52:24,582 INFO:werkzeug:_log:127.0.0.1 - - [04/Dec/2025 12:52:24] "[35m[1mGET /api/repositories HTTP/1.1[0m" 500 -
