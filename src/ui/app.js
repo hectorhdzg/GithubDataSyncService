@@ -29,8 +29,8 @@ async function loadStatistics() {
         
         // Calculate and display data age
         if (stats.last_sync) {
-            // Just show the raw timestamp with UTC label
-            document.getElementById('data-age').textContent = `${stats.last_sync} UTC`;
+            const localText = formatLocalTimestamp(stats.last_sync);
+            document.getElementById('data-age').textContent = localText;
             document.getElementById('data-age').className = 'mb-1 text-info';
         } else {
             document.getElementById('data-age').textContent = 'No data';
@@ -304,8 +304,27 @@ function calculateDataAge(lastSyncTime) {
 }
 
 function formatRelativeTime(timestamp) {
-    // Just return the raw timestamp with UTC label
-    return `${timestamp} UTC`;
+    return formatLocalTimestamp(timestamp);
+}
+
+function formatLocalTimestamp(timestamp) {
+    if (!timestamp) {
+        return 'Unknown';
+    }
+
+    try {
+        const normalized = timestamp.includes(' ') && !timestamp.includes('T')
+            ? timestamp.replace(' ', 'T')
+            : timestamp;
+        const date = new Date(normalized);
+        if (Number.isNaN(date.getTime())) {
+            return timestamp;
+        }
+        return `${date.toLocaleString()} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
+    } catch (error) {
+        console.error('Error formatting timestamp:', error, timestamp);
+        return timestamp;
+    }
 }
 
 function formatNumber(num) {

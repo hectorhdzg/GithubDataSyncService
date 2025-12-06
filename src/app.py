@@ -557,6 +557,28 @@ class GitHubSyncService:
             CREATE INDEX IF NOT EXISTS idx_sync_history_repo 
             ON sync_history(repository)
         ''')
+
+        # Cache repository labels (fetched at most once per day)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS repository_labels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repository TEXT NOT NULL,
+                name TEXT NOT NULL,
+                color TEXT,
+                description TEXT,
+                fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_repository_labels_repo 
+            ON repository_labels(repository)
+        ''')
+
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_repository_labels_repo_name 
+            ON repository_labels(repository, name)
+        ''')
         
         conn.commit()
         conn.close()
@@ -588,6 +610,126 @@ class GitHubSyncService:
                 "issues": {"state": "all"},
                 "pull_requests": {"state": "all"}
             }
+
+    def _get_cached_labels(self, repository: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Return cached labels and their last fetched timestamp for a repository."""
+        conn = sqlite3.connect(self.database_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name, color, description, fetched_at FROM repository_labels WHERE repository = ? ORDER BY name",
+            (repository,)
+        )
+        rows = cursor.fetchall()
+        cursor.execute(
+            "SELECT MAX(fetched_at) FROM repository_labels WHERE repository = ?",
+            (repository,)
+        )
+        last_fetched = cursor.fetchone()[0]
+        conn.close()
+
+        labels = []
+        for row in rows:
+            labels.append({
+                "name": row[0],
+                "color": row[1],
+                "description": row[2],
+                "fetched_at": row[3]
+            })
+        return labels, last_fetched
+
+    def sync_repository_labels(self, repository: str, force: bool = False) -> Dict[str, Any]:
+        """Fetch labels from GitHub at most once per day and cache them in the database."""
+        if not requests:
+            logger.error("requests module not available - cannot sync labels")
+            return {"success": False, "error": "requests module not available"}
+
+        try:
+            cached_labels, last_fetched = self._get_cached_labels(repository)
+            if last_fetched and not force:
+                try:
+                    fetched_dt = datetime.fromisoformat(last_fetched)
+                except Exception:
+                    fetched_dt = None
+                if fetched_dt:
+                    age_hours = (datetime.utcnow() - fetched_dt.replace(tzinfo=None)).total_seconds() / 3600.0
+                    if age_hours < 24:
+                        return {
+                            "success": True,
+                            "repository": repository,
+                            "cached": True,
+                            "labels": cached_labels,
+                            "last_fetched": last_fetched
+                        }
+
+            url = f"{self.base_url}/repos/{repository}/labels"
+            headers = self._build_conditional_headers(None)
+
+            labels: List[Dict[str, Any]] = []
+            page = 1
+            while True:
+                params = {"per_page": 100, "page": page}
+                response = requests.get(url, headers=headers, params=params, timeout=30)
+                response.raise_for_status()
+                batch = response.json()
+                if not isinstance(batch, list):
+                    break
+                labels.extend(batch)
+                if len(batch) < 100:
+                    break
+                page += 1
+
+            fetched_iso = datetime.utcnow().isoformat()
+
+            conn = sqlite3.connect(self.database_path)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM repository_labels WHERE repository = ?", (repository,))
+            for label in labels:
+                name = label.get('name')
+                if not name:
+                    continue
+                cursor.execute(
+                    """
+                    INSERT INTO repository_labels (repository, name, color, description, fetched_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        repository,
+                        name,
+                        label.get('color'),
+                        label.get('description', ''),
+                        fetched_iso
+                    )
+                )
+            conn.commit()
+            conn.close()
+
+            self._update_sync_metadata(
+                repository=repository,
+                sync_type='labels',
+                status='success',
+                items_synced=len(labels),
+                last_synced_at=fetched_iso
+            )
+
+            return {
+                "success": True,
+                "repository": repository,
+                "cached": False,
+                "labels": [
+                    {
+                        "name": lbl.get('name'),
+                        "color": lbl.get('color'),
+                        "description": lbl.get('description', ''),
+                        "fetched_at": fetched_iso
+                    }
+                    for lbl in labels
+                    if lbl.get('name')
+                ],
+                "last_fetched": fetched_iso
+            }
+        except Exception as exc:
+            logger.error(f"Error syncing labels for {repository}: {exc}")
+            return {"success": False, "error": str(exc), "repository": repository}
     
     def build_github_api_params(self, filters: dict, content_type: str) -> dict:
         """Build GitHub API parameters from filter configuration"""
@@ -626,10 +768,18 @@ class GitHubSyncService:
     def should_exclude_item(self, item: dict, filters: dict, content_type: str) -> bool:
         """Check if an item should be excluded based on exclude filters"""
         filter_config = filters.get(content_type, {})
+
+        item_labels = [label['name'] for label in item.get('labels', [])]
+
+        # Require presence of all requested labels (GitHub pulls API ignores label params)
+        required_labels = filter_config.get('labels') or []
+        if required_labels:
+            for required in required_labels:
+                if required not in item_labels:
+                    return True
         
         # Check exclude_labels
         if 'exclude_labels' in filter_config and filter_config['exclude_labels']:
-            item_labels = [label['name'] for label in item.get('labels', [])]
             for exclude_label in filter_config['exclude_labels']:
                 if exclude_label in item_labels:
                     return True
@@ -723,6 +873,15 @@ class GitHubSyncService:
                 name='Automatic Full Sync',
                 replace_existing=True
             )
+
+            # Add job to refresh labels once per day (separate from issue/PR sync cadence)
+            self.scheduler.add_job(
+                func=self._automatic_label_refresh,
+                trigger=IntervalTrigger(hours=24),
+                id='labels_refresh_job',
+                name='Daily Labels Refresh',
+                replace_existing=True
+            )
             
             # Start the scheduler
             self.scheduler.start()
@@ -760,6 +919,29 @@ class GitHubSyncService:
             
         except Exception as e:
             logger.error(f"Error in automatic sync: {e}")
+
+    def _automatic_label_refresh(self):
+        """Refresh labels for all repositories once per day."""
+        try:
+            repositories = self.get_repositories()
+            total_success = 0
+            total_errors = 0
+
+            for repo in repositories:
+                repo_name = repo['repo']
+                try:
+                    result = self.sync_repository_labels(repo_name, force=False)
+                    if result.get('success'):
+                        total_success += 1
+                    else:
+                        total_errors += 1
+                except Exception as exc:
+                    logger.error(f"Error refreshing labels for {repo_name}: {exc}")
+                    total_errors += 1
+
+            logger.info(f"Daily label refresh completed. Success: {total_success}, Errors: {total_errors}")
+        except Exception as e:
+            logger.error(f"Error in daily label refresh: {e}")
     
     def get_scheduler_status(self) -> Dict[str, Any]:
         """Get current status of the automatic sync scheduler"""
@@ -909,7 +1091,8 @@ class GitHubSyncService:
         main_category: str,
         classification: str,
         priority: int,
-        is_active: bool = True
+        is_active: bool = True,
+        filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Add a new repository to the database after validating it exists on GitHub."""
         try:
@@ -943,6 +1126,7 @@ class GitHubSyncService:
             resolved_main_category = (main_category or '').strip() or owner_login
             resolved_priority = int(priority) if isinstance(priority, (int, float, str)) else 3
             resolved_active = 1 if is_active else 0
+            filters_payload = json.dumps(filters) if filters else None
 
             if not resolved_main_category:
                 return {"success": False, "error": "Main category is required."}
@@ -957,8 +1141,8 @@ class GitHubSyncService:
             # Insert new repository
             cursor.execute('''
                 INSERT INTO repositories 
-                (repo, display_name, main_category, classification, language_group, priority, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                (repo, display_name, main_category, classification, language_group, priority, is_active, filters, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
             ''', (
                 normalized_repo,
                 resolved_display_name,
@@ -966,7 +1150,8 @@ class GitHubSyncService:
                 resolved_classification,
                 language_group,
                 resolved_priority,
-                resolved_active
+                resolved_active,
+                filters_payload
             ))
 
             conn.commit()
@@ -1036,14 +1221,17 @@ class GitHubSyncService:
                 return {"success": False, "error": "Repository not found"}
             
             # Build update query
-            allowed_fields = ['display_name', 'main_category', 'classification', 'priority', 'is_active']
+            allowed_fields = ['display_name', 'main_category', 'classification', 'priority', 'is_active', 'filters']
             updates = []
             values = []
             
             for field in allowed_fields:
                 if field in data:
                     updates.append(f"{field} = ?")
-                    values.append(data[field])
+                    if field == 'filters' and isinstance(data[field], (dict, list)):
+                        values.append(json.dumps(data[field]))
+                    else:
+                        values.append(data[field])
             
             if not updates:
                 conn.close()
@@ -1811,7 +1999,8 @@ def add_repository():
             main_category=data['main_category'],
             classification=data['classification'],
             priority=data['priority'],
-            is_active=data.get('is_active', True)
+            is_active=data.get('is_active', True),
+            filters=data.get('filters')
         )
         
         if result['success']:
@@ -1849,6 +2038,19 @@ def update_repository(repo_name):
     except Exception as e:
         logger.error(f"Error updating repository: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/repositories/<path:repo_name>/labels', methods=['GET'])
+def get_repository_labels(repo_name):
+    """Return cached labels for a repository; refresh if older than 24h or force=true."""
+    try:
+        force = request.args.get('force', 'false').lower() == 'true'
+        result = sync_service.sync_repository_labels(repo_name, force=force)
+        status_code = 200 if result.get('success') else 400
+        return jsonify(result), status_code
+    except Exception as e:
+        logger.error(f"Error getting labels for {repo_name}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/issues', methods=['GET'])
 def get_issues():

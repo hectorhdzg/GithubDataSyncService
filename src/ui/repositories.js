@@ -2,6 +2,7 @@
 
 let repositories = [];
 let repositoryStats = null;
+let repositoryLabelCache = {};
 
 const PRIORITY_CONFIG = {
     1: { label: 'High', className: 'priority-high', badgeClass: 'bg-danger' },
@@ -18,6 +19,8 @@ const LANGUAGE_BADGE_CLASS = {
     Java: 'bg-danger',
     Other: 'bg-dark'
 };
+
+let editingRepo = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     const repoUrlInput = document.getElementById('repoUrl');
@@ -99,6 +102,9 @@ function handleRepoUrlChange(rawValue) {
     if (categoryInput && !categoryInput.value.trim()) {
         categoryInput.value = parsed.owner;
     }
+
+    const repoIdentifier = `${parsed.owner}/${parsed.name}`;
+    loadLabelsForAdd(repoIdentifier);
 }
 
 async function loadRepositories() {
@@ -251,6 +257,9 @@ function renderRepositories() {
 
         const languageKey = repo.language_group;
         const languageBadge = LANGUAGE_BADGE_CLASS[languageKey] || LANGUAGE_BADGE_CLASS.Other;
+        const classificationChip = (repo.classification && repo.classification !== languageKey)
+            ? `<span class="badge bg-light text-muted border">Classification: ${escapeHtml(repo.classification)}</span>`
+            : '';
 
         const filters = repo.filters || {};
         const issueFilterSummary = escapeHtml(summarizeFilterConfiguration(filters.issues, 'issues'));
@@ -291,9 +300,7 @@ function renderRepositories() {
                             <span class="badge ${priorityInfo.badgeClass}">
                                 <i class="bi bi-bar-chart"></i> Priority: ${escapeHtml(priorityInfo.label)}
                             </span>
-                            <span class="badge bg-light text-muted border">
-                                Classification: ${escapeHtml(repo.classification)}
-                            </span>
+                            ${classificationChip}
                         </div>
 
                         <div class="small text-muted mb-3">
@@ -323,15 +330,18 @@ function renderRepositories() {
                             <div>Last Updated: ${updatedAt}</div>
                         </div>
 
-                        <div class="d-flex gap-2 mb-2">
+                        <div class="d-flex gap-2 flex-wrap mb-2">
                             <button class="btn btn-outline-primary btn-sm flex-fill" onclick="syncRepository('${repo.repo}')">
                                 <i class="bi bi-arrow-clockwise"></i> Sync All
                             </button>
-                            <button class="btn btn-outline-secondary btn-sm" onclick="syncRepositoryIssues('${repo.repo}')" title="Sync issues">
-                                <i class="bi bi-exclamation-circle"></i>
+                            <button class="btn btn-outline-secondary btn-sm d-flex align-items-center gap-1" onclick="syncRepositoryIssues('${repo.repo}')" title="Sync issues">
+                                <i class="bi bi-exclamation-circle"></i><span>Issues</span>
                             </button>
-                            <button class="btn btn-outline-success btn-sm" onclick="syncRepositoryPullRequests('${repo.repo}')" title="Sync pull requests">
-                                <i class="bi bi-git-pull-request"></i>
+                            <button class="btn btn-success btn-sm d-flex align-items-center gap-1" onclick="syncRepositoryPullRequests('${repo.repo}')" title="Sync pull requests">
+                                <i class="bi bi-git-pull-request"></i><span>PRs</span>
+                            </button>
+                            <button class="btn btn-outline-dark btn-sm d-flex align-items-center gap-1" onclick="openEditModal('${repo.repo}')" title="Edit repository">
+                                <i class="bi bi-pencil-square"></i><span>Edit</span>
                             </button>
                             <button class="btn btn-outline-danger btn-sm" onclick="removeRepository('${repo.repo}')" title="Remove repository">
                                 <i class="bi bi-trash"></i>
@@ -420,7 +430,8 @@ async function addRepository() {
             main_category: mainCategory,
             classification: classification || 'Other',
             priority: Number.isFinite(priorityValue) ? priorityValue : 3,
-            is_active: isActive
+            is_active: isActive,
+            filters: buildFiltersPayloadFromInputs({ fallback: {} })
         };
 
         const response = await fetch('/api/repositories', {
@@ -455,6 +466,87 @@ async function addRepository() {
     } catch (error) {
         console.error('Error adding repository:', error);
         showError(error.message || 'Failed to add repository. Please try again.');
+    }
+}
+
+function openEditModal(repoPath) {
+    editingRepo = repositories.find(r => r.repo === repoPath);
+    if (!editingRepo) {
+        showError('Unable to find repository details for editing.');
+        return;
+    }
+
+    document.getElementById('editRepoId').value = editingRepo.repo;
+    document.getElementById('editRepoDisplayName').value = editingRepo.display_name || editingRepo.repo;
+    document.getElementById('editRepoCategory').value = editingRepo.main_category || '';
+    document.getElementById('editRepoClassification').value = editingRepo.classification || 'Other';
+    document.getElementById('editRepoPriority').value = editingRepo.priority || 3;
+    document.getElementById('editRepoActive').checked = editingRepo.is_active === true || editingRepo.is_active === 1;
+
+    // Pre-fill label inputs from stored filters (if any)
+    const existingFilters = editingRepo.filters || {};
+    setLabelInputsFromFilters(existingFilters, 'edit');
+
+    // Populate label suggestions from cached GitHub labels
+    populateLabelSuggestions(repoPath, 'edit');
+
+    const modal = new bootstrap.Modal(document.getElementById('editRepoModal'));
+    modal.show();
+}
+
+async function saveRepositoryEdits() {
+    if (!editingRepo) {
+        showError('No repository selected for edit.');
+        return;
+    }
+
+    const displayName = document.getElementById('editRepoDisplayName').value.trim();
+    const mainCategory = document.getElementById('editRepoCategory').value.trim();
+    const classification = document.getElementById('editRepoClassification').value;
+    const priorityValue = parseInt(document.getElementById('editRepoPriority').value, 10);
+    const isActive = document.getElementById('editRepoActive').checked;
+
+    if (!mainCategory) {
+        showError('Main category is required.');
+        return;
+    }
+
+    const payload = {
+        display_name: displayName || editingRepo.repo,
+        main_category: mainCategory,
+        classification: classification || 'Other',
+        priority: Number.isFinite(priorityValue) ? priorityValue : editingRepo.priority || 3,
+        is_active: isActive,
+        filters: buildFiltersPayloadFromInputs({
+            fallback: editingRepo.filters || {},
+            prefix: 'edit'
+        })
+    };
+
+    try {
+        const response = await fetch(`/api/repositories/${encodeURIComponent(editingRepo.repo)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.success === false) {
+            const message = result.error || `Failed to update repository (HTTP ${response.status})`;
+            throw new Error(message);
+        }
+
+        const modalEl = document.getElementById('editRepoModal');
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        if (modal) {
+            modal.hide();
+        }
+        editingRepo = null;
+        loadRepositories();
+        showSuccess('Repository updated successfully.');
+    } catch (error) {
+        console.error('Error updating repository:', error);
+        showError(error.message || 'Failed to update repository.');
     }
 }
 
@@ -581,4 +673,85 @@ function showAlert(message, type) {
             alertDiv.remove();
         }
     }, 5000);
+}
+
+function parseLabelInput(value) {
+    if (!value) return [];
+    return Array.from(new Set(
+        value
+            .split(/[,\n]/)
+            .map(v => v.trim())
+            .filter(Boolean)
+    ));
+}
+
+function setLabelInputsFromFilters(filters, prefix) {
+    const issuesInput = document.getElementById(`${prefix}IssuesLabels`);
+    const prsInput = document.getElementById(`${prefix}PrLabels`);
+    if (issuesInput && filters && filters.issues && Array.isArray(filters.issues.labels)) {
+        issuesInput.value = filters.issues.labels.join(', ');
+    }
+    if (prsInput && filters && filters.pull_requests && Array.isArray(filters.pull_requests.labels)) {
+        prsInput.value = filters.pull_requests.labels.join(', ');
+    }
+}
+
+function buildFiltersPayloadFromInputs({ fallback = {}, prefix = '' }) {
+    const filters = JSON.parse(JSON.stringify(fallback || {}));
+
+    const issuesInput = document.getElementById(`${prefix}IssuesLabels`);
+    const prsInput = document.getElementById(`${prefix}PrLabels`);
+
+    const issuesLabels = issuesInput ? parseLabelInput(issuesInput.value) : [];
+    const prLabels = prsInput ? parseLabelInput(prsInput.value) : [];
+
+    if (!filters.issues) filters.issues = {};
+    if (!filters.pull_requests) filters.pull_requests = {};
+
+    if (issuesLabels.length > 0) {
+        filters.issues.labels = issuesLabels;
+    } else {
+        delete filters.issues.labels;
+    }
+
+    if (prLabels.length > 0) {
+        filters.pull_requests.labels = prLabels;
+    } else {
+        delete filters.pull_requests.labels;
+    }
+
+    return filters;
+}
+
+async function fetchRepositoryLabels(repoPath) {
+    if (!repoPath) return [];
+    if (repositoryLabelCache[repoPath]) {
+        return repositoryLabelCache[repoPath];
+    }
+
+    try {
+        const response = await fetch(`/api/repositories/${encodeURIComponent(repoPath)}/labels`);
+        const result = await response.json().catch(() => ({}));
+        if (response.ok && result.success && Array.isArray(result.labels)) {
+            repositoryLabelCache[repoPath] = result.labels;
+            return result.labels;
+        }
+    } catch (error) {
+        console.warn('Unable to fetch labels for', repoPath, error);
+    }
+    return [];
+}
+
+async function populateLabelSuggestions(repoPath, prefix) {
+    const labels = await fetchRepositoryLabels(repoPath);
+    const dataList = document.getElementById(`${prefix}IssuesLabelsList`);
+    const prDataList = document.getElementById(`${prefix}PrLabelsList`);
+
+    const optionHtml = labels.map(label => `<option value="${escapeHtml(label.name || '')}"></option>`).join('');
+    if (dataList) dataList.innerHTML = optionHtml;
+    if (prDataList) prDataList.innerHTML = optionHtml;
+}
+
+async function loadLabelsForAdd(repoIdentifier) {
+    await populateLabelSuggestions(repoIdentifier, 'add');
 }

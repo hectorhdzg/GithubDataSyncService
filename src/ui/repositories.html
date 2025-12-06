@@ -81,6 +81,78 @@
         </div>
     </div>
 
+    <!-- Edit Repository Modal -->
+    <div class="modal fade" id="editRepoModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Edit Repository</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="edit-repo-form">
+                        <div class="row g-3">
+                            <div class="col-12">
+                                <label class="form-label">Repository</label>
+                                <input type="text" class="form-control" id="editRepoId" disabled>
+                            </div>
+                            <div class="col-12">
+                                <label for="editRepoDisplayName" class="form-label">Display Name</label>
+                                <input type="text" class="form-control" id="editRepoDisplayName" placeholder="Shown within the dashboard">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="editRepoCategory" class="form-label">Main Category</label>
+                                <input type="text" class="form-control" id="editRepoCategory" placeholder="e.g., Azure SDK">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="editRepoClassification" class="form-label">Language Classification</label>
+                                <select class="form-control" id="editRepoClassification">
+                                    <option value="JavaScript">JavaScript / TypeScript</option>
+                                    <option value="Node.js">Node.js</option>
+                                    <option value="Web/Browser">Web/Browser</option>
+                                    <option value="DotNet">.NET</option>
+                                    <option value="Python">Python</option>
+                                    <option value="Java">Java</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="editRepoPriority" class="form-label">Priority</label>
+                                <select class="form-control" id="editRepoPriority">
+                                    <option value="1">High</option>
+                                    <option value="2">Medium</option>
+                                    <option value="3">Low</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6 d-flex align-items-end">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="editRepoActive">
+                                    <label class="form-check-label" for="editRepoActive">
+                                        Active (included in scheduled syncs)
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <label for="editIssuesLabels" class="form-label">Issue labels (comma-separated, optional)</label>
+                                <input list="editIssuesLabelsList" type="text" class="form-control" id="editIssuesLabels" placeholder="e.g., bug, needs-triage">
+                                <datalist id="editIssuesLabelsList"></datalist>
+                            </div>
+                            <div class="col-12">
+                                <label for="editPrLabels" class="form-label">PR labels (comma-separated, optional)</label>
+                                <input list="editPrLabelsList" type="text" class="form-control" id="editPrLabels" placeholder="e.g., service-bus, storage">
+                                <datalist id="editPrLabelsList"></datalist>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="saveRepositoryEdits()">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Add Repository Modal -->
     <div class="modal fade" id="addRepoModal" tabindex="-1">
         <div class="modal-dialog">
@@ -130,6 +202,16 @@
                                         Active (included in scheduled syncs)
                                     </label>
                                 </div>
+                            </div>
+                            <div class="col-12">
+                                <label for="addIssuesLabels" class="form-label">Issue labels (optional)</label>
+                                <input list="addIssuesLabelsList" type="text" class="form-control" id="addIssuesLabels" placeholder="Comma-separated">
+                                <datalist id="addIssuesLabelsList"></datalist>
+                            </div>
+                            <div class="col-12">
+                                <label for="addPrLabels" class="form-label">PR labels (optional)</label>
+                                <input list="addPrLabelsList" type="text" class="form-control" id="addPrLabels" placeholder="Comma-separated">
+                                <datalist id="addPrLabelsList"></datalist>
                             </div>
                         </div>
                     </form>
