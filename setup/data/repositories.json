@@ -202,5 +202,29 @@
             "issues": {"state": "all"},
             "pull_requests": {"state": "all"}
         }
+    },
+    {
+        "repo": "microsoft/opentelemetry-distro-javascript",
+        "display_name": "OpenTelemetry Distro JavaScript",
+        "main_category": "OpenTelemetry",
+        "classification": "JavaScript",
+        "priority": 1,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/opentelemetry-distro-python",
+        "display_name": "OpenTelemetry Distro Python",
+        "main_category": "OpenTelemetry",
+        "classification": "Python",
+        "priority": 1,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
     }
 ]

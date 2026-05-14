@@ -1,23 +1,12 @@
 // Repository Management JavaScript
 
 let repositories = [];
-let repositoryStats = null;
 let repositoryLabelCache = {};
 
 const PRIORITY_CONFIG = {
-    1: { label: 'High', className: 'priority-high', badgeClass: 'bg-danger' },
-    2: { label: 'Medium', className: 'priority-medium', badgeClass: 'bg-warning text-dark' },
-    3: { label: 'Low', className: 'priority-low', badgeClass: 'bg-success' }
-};
-
-const LANGUAGE_BADGE_CLASS = {
-    DotNet: 'bg-primary',
-    'Node.js': 'bg-success',
-    'Web/Browser': 'bg-info text-dark',
-    JavaScript: 'bg-warning text-dark',
-    Python: 'bg-secondary',
-    Java: 'bg-danger',
-    Other: 'bg-dark'
+    1: { label: 'High', badgeClass: 'badge-priority-1' },
+    2: { label: 'Medium', badgeClass: 'badge-priority-2' },
+    3: { label: 'Low', badgeClass: 'badge-priority-3' }
 };
 
 let editingRepo = null;
@@ -103,13 +92,10 @@ function handleRepoUrlChange(rawValue) {
         categoryInput.value = parsed.owner;
     }
 
-    const repoIdentifier = `${parsed.owner}/${parsed.name}`;
     loadLabelsForAdd(repoIdentifier);
 }
 
 async function loadRepositories() {
-    const listContainer = document.getElementById('repository-list');
-
     try {
         const response = await fetch('/api/repositories?includeInactive=true&includeFilters=true');
         const data = await response.json();
@@ -120,270 +106,85 @@ async function loadRepositories() {
         }
 
         repositories = Array.isArray(data.repositories) ? data.repositories : [];
-        repositoryStats = data.stats || null;
-
-        renderRepositoryMetrics();
         renderRepositories();
     } catch (error) {
         console.error('Error loading repositories:', error);
-        repositoryStats = null;
-        renderRepositoryMetrics();
-
-        if (listContainer) {
-            listContainer.innerHTML = `
-                <div class="col-12">
-                    <div class="alert alert-danger">
-                        ${escapeHtml(error.message || 'Failed to load repositories. Please check if the sync service is running.')}
-                    </div>
-                </div>
-            `;
-        }
-
+        document.getElementById('repository-list').innerHTML = `
+            <tr><td colspan="9" class="text-center text-danger py-4">${escapeHtml(error.message || 'Failed to load repositories.')}</td></tr>
+        `;
         showError(error.message || 'Failed to load repositories. Please check if the sync service is running.');
     }
 }
 
-function renderRepositoryMetrics() {
-    const metricsContainer = document.getElementById('repository-metrics');
-    if (!metricsContainer) {
-        return;
-    }
-
-    if (!repositoryStats) {
-        metricsContainer.innerHTML = '';
-        return;
-    }
-
-    const total = repositoryStats.total || 0;
-    const active = repositoryStats.active || 0;
-    const inactive = repositoryStats.inactive || 0;
-    const issues = repositoryStats.issues || 0;
-    const pullRequests = repositoryStats.pull_requests || 0;
-
-    metricsContainer.innerHTML = `
-        <div class="col-md-3 mb-3">
-            <div class="card metric-card h-100">
-                <div class="card-body text-center">
-                    <div class="metric-label text-muted">Total Repositories</div>
-                    <div class="metric-value">${total}</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3 mb-3">
-            <div class="card metric-card h-100">
-                <div class="card-body text-center">
-                    <div class="metric-label text-muted">Active</div>
-                    <div class="metric-value text-success">${active}</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3 mb-3">
-            <div class="card metric-card h-100">
-                <div class="card-body text-center">
-                    <div class="metric-label text-muted">Inactive</div>
-                    <div class="metric-value text-muted">${inactive}</div>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3 mb-3">
-            <div class="card metric-card h-100">
-                <div class="card-body text-center">
-                    <div class="metric-label text-muted">Tracked Items</div>
-                    <div class="metric-value">${issues + pullRequests}</div>
-                    <div class="metric-subtext text-muted">${issues} issues • ${pullRequests} PRs</div>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
 function renderRepositories() {
-    const container = document.getElementById('repository-list');
-
-    if (!container) {
-        return;
-    }
+    const tbody = document.getElementById('repository-list');
+    const emptyState = document.getElementById('repository-empty');
+    const table = document.getElementById('repository-table');
 
     if (!repositories || repositories.length === 0) {
-        container.innerHTML = `
-            <div class="col-12">
-                <div class="text-center p-5">
-                    <i class="bi bi-folder-x text-muted" style="font-size: 4rem;"></i>
-                    <h4 class="mt-3 text-muted">No repositories configured</h4>
-                    <p class="text-muted">Add your first repository to start syncing GitHub issues and pull requests.</p>
-                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRepoModal">
-                        <i class="bi bi-plus-circle"></i> Add Repository
-                    </button>
-                </div>
-            </div>
-        `;
+        table.classList.add('d-none');
+        emptyState.classList.remove('d-none');
         return;
     }
 
-    const sortedRepos = repositories
-        .slice()
-        .sort((a, b) => {
-            const priorityA = Number(a.priority) || 99;
-            const priorityB = Number(b.priority) || 99;
-            if (priorityA !== priorityB) {
-                return priorityA - priorityB;
-            }
-            return (a.repo || '').localeCompare(b.repo || '');
-        });
+    table.classList.remove('d-none');
+    emptyState.classList.add('d-none');
 
-    const repoCards = sortedRepos.map(rawRepo => {
+    const sortedRepos = repositories.slice().sort((a, b) => {
+        const pA = Number(a.priority) || 99;
+        const pB = Number(b.priority) || 99;
+        if (pA !== pB) return pA - pB;
+        return (a.repo || '').localeCompare(b.repo || '');
+    });
+
+    tbody.innerHTML = sortedRepos.map(rawRepo => {
         const repo = {
             ...rawRepo,
             repo: rawRepo.repo || '',
-            display_name: rawRepo.display_name || rawRepo.repo || '—',
-            main_category: rawRepo.main_category || 'Uncategorized',
+            display_name: rawRepo.display_name || rawRepo.repo || '',
+            main_category: rawRepo.main_category || '',
             classification: rawRepo.classification || 'Other',
-            language_group: rawRepo.language_group || rawRepo.classification || 'Other',
             issue_count: Number(rawRepo.issue_count) || 0,
             pr_count: Number(rawRepo.pr_count) || 0,
             is_active: rawRepo.is_active === true || rawRepo.is_active === 1
         };
 
-        const isActive = repo.is_active;
-        const statusIcon = isActive ? 'check-circle-fill text-success' : 'x-circle-fill text-danger';
-        const status = isActive ? 'Active' : 'Inactive';
-
         const priorityValue = Number(repo.priority);
-        const priorityInfo = PRIORITY_CONFIG[priorityValue] || {
-            label: Number.isFinite(priorityValue) ? `Custom (${priorityValue})` : 'Unspecified',
-            className: 'priority-custom',
-            badgeClass: 'bg-secondary'
-        };
-
-        const languageKey = repo.language_group;
-        const languageBadge = LANGUAGE_BADGE_CLASS[languageKey] || LANGUAGE_BADGE_CLASS.Other;
-        const classificationChip = (repo.classification && repo.classification !== languageKey)
-            ? `<span class="badge bg-light text-muted border">Classification: ${escapeHtml(repo.classification)}</span>`
-            : '';
-
-        const filters = repo.filters || {};
-        const issueFilterSummary = escapeHtml(summarizeFilterConfiguration(filters.issues, 'issues'));
-        const prFilterSummary = escapeHtml(summarizeFilterConfiguration(filters.pull_requests, 'prs'));
-
+        const priorityInfo = PRIORITY_CONFIG[priorityValue] || { label: 'N/A', badgeClass: 'bg-secondary' };
+        const statusBadge = repo.is_active
+            ? '<span class="badge bg-success">Active</span>'
+            : '<span class="badge bg-secondary">Inactive</span>';
         const updatedAt = formatDate(repo.updated_at);
-        const createdAt = formatDate(repo.created_at);
-        const [repoOwner, repoName] = repo.repo.split('/');
-        const repoLink = (repoOwner && repoName)
-            ? `https://github.com/${encodeURIComponent(repoOwner)}/${encodeURIComponent(repoName)}`
-            : '#';
+        const [owner, name] = repo.repo.split('/');
+        const repoLink = (owner && name) ? `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(name)}` : '#';
 
         return `
-            <div class="col-md-6 col-lg-4 mb-4">
-                <div class="card repo-card h-100 ${priorityInfo.className}">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-start mb-3">
-                            <div>
-                                <h5 class="card-title mb-0">
-                                    <i class="bi bi-github"></i> ${escapeHtml(repo.repo)}
-                                </h5>
-                                <small class="text-muted">${escapeHtml(repo.display_name)}</small>
-                            </div>
-                            <span class="badge status-badge ${isActive ? 'bg-success' : 'bg-danger'}">
-                                <i class="bi bi-${statusIcon}"></i> ${status}
-                            </span>
-                        </div>
-
-                        <div class="mb-3">
-                            <small class="text-muted">Category:</small>
-                            <div class="fw-bold">${escapeHtml(repo.main_category)}</div>
-                        </div>
-
-                        <div class="mb-3 d-flex flex-wrap gap-2 align-items-center">
-                            <span class="badge ${languageBadge}">
-                                <i class="bi bi-translate"></i> ${escapeHtml(languageKey)}
-                            </span>
-                            <span class="badge ${priorityInfo.badgeClass}">
-                                <i class="bi bi-bar-chart"></i> Priority: ${escapeHtml(priorityInfo.label)}
-                            </span>
-                            ${classificationChip}
-                        </div>
-
-                        <div class="small text-muted mb-3">
-                            <div>Issue filter: ${issueFilterSummary}</div>
-                            <div>PR filter: ${prFilterSummary}</div>
-                        </div>
-
-                        <div class="row text-center mb-3">
-                            <div class="col-6">
-                                <div class="text-primary">
-                                    <i class="bi bi-exclamation-circle"></i>
-                                </div>
-                                <small class="text-muted">Issues</small>
-                                <div class="fw-bold">${repo.issue_count}</div>
-                            </div>
-                            <div class="col-6">
-                                <div class="text-success">
-                                    <i class="bi bi-git-pull-request"></i>
-                                </div>
-                                <small class="text-muted">PRs</small>
-                                <div class="fw-bold">${repo.pr_count}</div>
-                            </div>
-                        </div>
-
-                        <div class="small text-muted mb-3">
-                            <div>Created: ${createdAt}</div>
-                            <div>Last Updated: ${updatedAt}</div>
-                        </div>
-
-                        <div class="d-flex gap-2 flex-wrap mb-2">
-                            <button class="btn btn-outline-primary btn-sm flex-fill" onclick="syncRepository('${repo.repo}')">
-                                <i class="bi bi-arrow-clockwise"></i> Sync All
-                            </button>
-                            <button class="btn btn-outline-secondary btn-sm d-flex align-items-center gap-1" onclick="syncRepositoryIssues('${repo.repo}')" title="Sync issues">
-                                <i class="bi bi-exclamation-circle"></i><span>Issues</span>
-                            </button>
-                            <button class="btn btn-success btn-sm d-flex align-items-center gap-1" onclick="syncRepositoryPullRequests('${repo.repo}')" title="Sync pull requests">
-                                <i class="bi bi-git-pull-request"></i><span>PRs</span>
-                            </button>
-                            <button class="btn btn-outline-dark btn-sm d-flex align-items-center gap-1" onclick="openEditModal('${repo.repo}')" title="Edit repository">
-                                <i class="bi bi-pencil-square"></i><span>Edit</span>
-                            </button>
-                            <button class="btn btn-outline-danger btn-sm" onclick="removeRepository('${repo.repo}')" title="Remove repository">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </div>
-
-                        <a class="btn btn-link btn-sm px-0" href="${repoLink}" target="_blank" rel="noopener">
-                            View on GitHub
-                        </a>
-                    </div>
-                </div>
-            </div>
+            <tr>
+                <td>
+                    <a href="${repoLink}" target="_blank" rel="noopener" class="text-decoration-none fw-semibold">${escapeHtml(repo.repo)}</a>
+                    ${repo.display_name !== repo.repo ? `<br><small class="text-muted">${escapeHtml(repo.display_name)}</small>` : ''}
+                </td>
+                <td>${escapeHtml(repo.main_category)}</td>
+                <td><span class="badge bg-dark">${escapeHtml(repo.classification)}</span></td>
+                <td><span class="badge ${priorityInfo.badgeClass}">${escapeHtml(priorityInfo.label)}</span></td>
+                <td>${repo.issue_count}</td>
+                <td>${repo.pr_count}</td>
+                <td>${statusBadge}</td>
+                <td><small>${updatedAt}</small></td>
+                <td class="text-end text-nowrap">
+                    <button class="btn btn-sm btn-outline-primary me-1" onclick="openEditModal('${escapeHtml(repo.repo)}')" title="Edit">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary me-1" onclick="syncRepository('${escapeHtml(repo.repo)}')" title="Sync">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="removeRepository('${escapeHtml(repo.repo)}')" title="Delete">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>
         `;
     }).join('');
-
-    container.innerHTML = repoCards;
-}
-
-function summarizeFilterConfiguration(config, type) {
-    if (!config || typeof config !== 'object') {
-        return type === 'prs' ? 'All pull requests' : 'All issues';
-    }
-
-    const parts = [];
-
-    if (config.state) {
-        parts.push(`State: ${config.state}`);
-    }
-
-    if (Array.isArray(config.labels) && config.labels.length > 0) {
-        parts.push(`Labels: ${config.labels.join(', ')}`);
-    }
-
-    if (config.assignee) {
-        parts.push(`Assignee: ${config.assignee}`);
-    }
-
-    if (config.milestone) {
-        parts.push(`Milestone: ${config.milestone}`);
-    }
-
-    return parts.length ? parts.join(' • ') : 'Default filters';
 }
 
 async function addRepository() {
