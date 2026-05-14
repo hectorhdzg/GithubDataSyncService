@@ -975,21 +975,22 @@ class GitHubSyncService:
             return []
     
     def _setup_automatic_sync(self):
-        """Setup automatic sync job with interval based on auth status."""
+        """Setup round-robin sync: batch of repos every hour, full rotation ~4-5h."""
         try:
-            # Unauthenticated: 60 req/hr → sync every 6h to stay well within budget
-            # Authenticated: 5000 req/hr → sync every 2h
-            sync_hours = 2 if self.github_token else 6
+            # Round-robin: sync a batch of repos each hour.
+            # With 17 repos and batch_size=4, a full rotation completes in ~5 hours.
+            # At 4 repos × 2 calls = 8 API requests/hour — well within 60 req/hr.
+            self._sync_batch_size = 4
 
             self.scheduler.add_job(
-                func=self._automatic_full_sync,
-                trigger=IntervalTrigger(hours=sync_hours),
+                func=self._automatic_rotation_sync,
+                trigger=IntervalTrigger(hours=1),
                 id='auto_sync_job',
-                name='Automatic Full Sync',
+                name='Hourly Rotation Sync',
                 replace_existing=True
             )
 
-            # Add job to refresh labels once per day (separate from issue/PR sync cadence)
+            # Labels refresh once per day (lightweight, separate cadence)
             self.scheduler.add_job(
                 func=self._automatic_label_refresh,
                 trigger=IntervalTrigger(hours=24),
@@ -997,16 +998,81 @@ class GitHubSyncService:
                 name='Daily Labels Refresh',
                 replace_existing=True
             )
-            
-            # Start the scheduler
+
             self.scheduler.start()
             auth_mode = "authenticated" if self.github_token else "unauthenticated (60 req/hr)"
-            logger.info(f"Automatic sync scheduler started - syncing every {sync_hours}h ({auth_mode})")
+            logger.info(
+                f"Round-robin scheduler started — {self._sync_batch_size} repos/hour ({auth_mode})"
+            )
         except Exception as e:
             logger.error(f"Error setting up automatic sync: {e}")
-    
+
+    def _get_repos_sorted_by_staleness(self) -> List[Dict[str, Any]]:
+        """Return active repos ordered by oldest last_sync first (least-recently-synced)."""
+        repositories = self.get_repositories()
+        if not repositories:
+            return []
+
+        # Attach last sync timestamp to each repo for sorting
+        for repo in repositories:
+            repo_name = repo['repo']
+            last_issues = self._get_last_sync_timestamp(repo_name, 'issues')
+            last_prs = self._get_last_sync_timestamp(repo_name, 'pull_requests')
+            # Use the most recent of the two as the repo's "freshness"
+            timestamps = [t for t in (last_issues, last_prs) if t]
+            repo['_last_sync'] = max(timestamps) if timestamps else ''
+
+        # Sort: never-synced first (empty string), then oldest first
+        repositories.sort(key=lambda r: r['_last_sync'])
+        return repositories
+
+    def _automatic_rotation_sync(self):
+        """Sync the next batch of repos (least-recently-synced first)."""
+        try:
+            session_id = str(uuid4())
+            repos = self._get_repos_sorted_by_staleness()
+            batch = repos[:self._sync_batch_size]
+
+            if not batch:
+                logger.info("No repositories to sync")
+                return
+
+            repo_names = [r['repo'] for r in batch]
+            logger.info(
+                f"Rotation sync — batch of {len(batch)}: {repo_names} "
+                f"(Session: {session_id})"
+            )
+
+            total_success = 0
+            total_errors = 0
+
+            for repo in batch:
+                repo_name = repo['repo']
+
+                if self._is_rate_limited():
+                    logger.warning("Rate limit reached mid-batch, stopping early")
+                    break
+
+                try:
+                    issues_result = self.sync_repository_issues(repo_name, session_id)
+                    prs_result = self.sync_repository_prs(repo_name, session_id)
+
+                    if issues_result.get('success') and prs_result.get('success'):
+                        total_success += 1
+                    else:
+                        total_errors += 1
+                except Exception as e:
+                    logger.error(f"Error syncing {repo_name}: {e}")
+                    total_errors += 1
+
+            logger.info(
+                f"Rotation sync done — Success: {total_success}, Errors: {total_errors}"
+            )
+        except Exception as e:
+            logger.error(f"Error in rotation sync: {e}")
+
     def _automatic_full_sync(self):
-        """Perform automatic full sync, skipping repos when rate budget is low."""
+        """Perform a full sync of all repos (used by manual /api/sync/full trigger)."""
         try:
             session_id = str(uuid4())
             logger.info(f"Starting automatic full sync - Session ID: {session_id}")

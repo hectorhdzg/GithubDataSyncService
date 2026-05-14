@@ -726,6 +726,74 @@ class TestRateLimiting(TestServiceBase):
         self.assertEqual(mock_requests.get.call_count, 2)
 
 
+class TestRotationSync(TestServiceBase):
+    """Test the round-robin rotation sync logic."""
+
+    def _add_repo(self, repo, priority=1):
+        """Helper to add a repo without GitHub validation."""
+        with patch.object(GitHubSyncService, '_validate_repository_on_github',
+                          return_value=(True, {'full_name': repo, 'owner': {'login': 'x'}}, None)):
+            self.svc.add_repository(
+                repo=repo, display_name=repo, main_category='Test',
+                classification='Python', priority=priority
+            )
+
+    def test_repos_sorted_by_staleness_never_synced_first(self):
+        """Repos that have never been synced should appear before recently-synced ones."""
+        self._add_repo('test/a')
+        self._add_repo('test/b')
+        # Mark 'test/a' as recently synced
+        self.svc._update_sync_metadata('test/a', 'issues', 'success', last_synced_at='2024-06-01T00:00:00Z')
+        self.svc._update_sync_metadata('test/a', 'pull_requests', 'success', last_synced_at='2024-06-01T00:00:00Z')
+
+        repos = self.svc._get_repos_sorted_by_staleness()
+        repo_names = [r['repo'] for r in repos]
+        # test/b (never synced) must come before test/a (synced)
+        self.assertLess(repo_names.index('test/b'), repo_names.index('test/a'))
+
+    def test_batch_size_limits_repos_synced(self):
+        """Rotation sync should only sync batch_size repos per run."""
+        for i in range(6):
+            self._add_repo(f'test/repo{i}')
+        self.svc._sync_batch_size = 3
+
+        synced_repos = []
+
+        def track_issues(repo_name, session_id=None):
+            synced_repos.append(repo_name)
+            return {'success': True}
+
+        def track_prs(repo_name, session_id=None):
+            return {'success': True}
+
+        self.svc.sync_repository_issues = track_issues
+        self.svc.sync_repository_prs = track_prs
+        self.svc._automatic_rotation_sync()
+
+        self.assertEqual(len(synced_repos), 3)
+
+    def test_rotation_stops_on_rate_limit(self):
+        """If rate limited mid-batch, rotation should stop early."""
+        self._add_repo('test/r1')
+        self._add_repo('test/r2')
+        self.svc._sync_batch_size = 4
+        # Simulate rate limit exhausted
+        self.svc._rate_limit_remaining = 2  # below floor of 5
+
+        synced_repos = []
+
+        def track(repo_name, session_id=None):
+            synced_repos.append(repo_name)
+            return {'success': True}
+
+        self.svc.sync_repository_issues = track
+        self.svc.sync_repository_prs = track
+        self.svc._automatic_rotation_sync()
+
+        # Should not have synced anything due to rate limit
+        self.assertEqual(len(synced_repos), 0)
+
+
 class TestValidateRepository(TestServiceBase):
 
     @patch('app.requests')
