@@ -116,6 +116,17 @@ class GitHubSyncService:
         if self.github_token:
             self.headers['Authorization'] = f'token {self.github_token}'
 
+        # Rate-limit bookkeeping (updated after every GitHub response)
+        self._rate_limit_remaining: Optional[int] = None
+        self._rate_limit_reset: Optional[float] = None  # unix timestamp
+
+        # ETag cache: keyed by request URL
+        self._etag_cache: Dict[str, str] = {}
+
+        # Minimum remaining requests before the service voluntarily pauses.
+        # Keeps a small safety buffer so we never actually hit 0.
+        self._rate_limit_floor = 5
+
         # Heuristics for mapping repositories to language groupings used by the dashboard UI
         self.language_overrides = {
             'microsoft/applicationinsights-node.js': 'Node.js',
@@ -266,6 +277,100 @@ class GitHubSyncService:
             except Exception as exc:
                 logger.warning(f"Failed to format If-Modified-Since header from {last_sync_iso}: {exc}")
         return headers
+
+    # ── Rate-limit & HTTP helpers ────────────────────────────────────────
+
+    def _update_rate_limit(self, response) -> None:
+        """Extract X-RateLimit headers from a GitHub response."""
+        remaining = response.headers.get('X-RateLimit-Remaining')
+        reset = response.headers.get('X-RateLimit-Reset')
+        if remaining is not None:
+            try:
+                self._rate_limit_remaining = int(remaining)
+            except ValueError:
+                pass
+        if reset is not None:
+            try:
+                self._rate_limit_reset = float(reset)
+            except ValueError:
+                pass
+        if self._rate_limit_remaining is not None:
+            logger.debug(f"GitHub rate limit remaining: {self._rate_limit_remaining}")
+
+    def _seconds_until_reset(self) -> float:
+        """Return seconds until the rate-limit window resets (0 if unknown)."""
+        if self._rate_limit_reset is None:
+            return 0.0
+        return max(0.0, self._rate_limit_reset - time.time())
+
+    def _is_rate_limited(self) -> bool:
+        """True when the remaining quota is at or below the safety floor."""
+        if self._rate_limit_remaining is None:
+            return False
+        return self._rate_limit_remaining <= self._rate_limit_floor
+
+    def get_rate_limit_info(self) -> Dict[str, Any]:
+        """Return current rate-limit bookkeeping for the /health endpoint."""
+        return {
+            "remaining": self._rate_limit_remaining,
+            "reset_utc": (
+                datetime.fromtimestamp(self._rate_limit_reset, tz=timezone.utc).isoformat()
+                if self._rate_limit_reset else None
+            ),
+            "seconds_until_reset": round(self._seconds_until_reset()),
+            "is_rate_limited": self._is_rate_limited(),
+            "authenticated": bool(self.github_token),
+        }
+
+    def _github_get(self, url: str, headers: Dict[str, str], params: Dict[str, Any],
+                    timeout: int = 30):
+        """Central helper for GitHub GET requests.
+
+        * Attaches a cached ETag when available.
+        * Parses rate-limit headers from every response.
+        * Backs off when receiving 403 (rate limit) or 429.
+        * Adds a small delay between calls to avoid abuse triggers.
+        """
+        # Attach ETag if we have one for this URL
+        cache_key = url + '?' + '&'.join(f'{k}={v}' for k, v in sorted(params.items()))
+        etag = self._etag_cache.get(cache_key)
+        if etag:
+            headers.setdefault('If-None-Match', etag)
+
+        # Pre-flight: if we know we're rate-limited, wait
+        if self._is_rate_limited():
+            wait = self._seconds_until_reset() + 1
+            logger.warning(f"Rate limit nearly exhausted, waiting {wait:.0f}s until reset")
+            time.sleep(min(wait, 3600))  # cap at 1h as a safety net
+
+        response = requests.get(url, headers=headers, params=params, timeout=timeout)
+        self._update_rate_limit(response)
+
+        # Store ETag for future conditional requests
+        new_etag = response.headers.get('ETag')
+        if new_etag:
+            self._etag_cache[cache_key] = new_etag
+
+        # Handle secondary rate-limit / abuse detection
+        if response.status_code in (403, 429):
+            retry_after = response.headers.get('Retry-After')
+            if retry_after:
+                wait = int(retry_after)
+            else:
+                wait = max(self._seconds_until_reset(), 60)
+            logger.warning(
+                f"GitHub returned {response.status_code} for {url}. "
+                f"Waiting {wait:.0f}s before retrying."
+            )
+            time.sleep(min(wait, 3600))
+            # Retry once
+            response = requests.get(url, headers=headers, params=params, timeout=timeout)
+            self._update_rate_limit(response)
+
+        # Small delay between calls to avoid triggering abuse limits
+        time.sleep(1)
+
+        return response
 
     @staticmethod
     def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
@@ -675,7 +780,7 @@ class GitHubSyncService:
             page = 1
             while True:
                 params = {"per_page": 100, "page": page}
-                response = requests.get(url, headers=headers, params=params, timeout=30)
+                response = self._github_get(url, headers=headers, params=params, timeout=30)
                 response.raise_for_status()
                 batch = response.json()
                 if not isinstance(batch, list):
@@ -870,12 +975,15 @@ class GitHubSyncService:
             return []
     
     def _setup_automatic_sync(self):
-        """Setup automatic sync job to run every 2 hours"""
+        """Setup automatic sync job with interval based on auth status."""
         try:
-            # Add job to run every 2 hours
+            # Unauthenticated: 60 req/hr → sync every 6h to stay well within budget
+            # Authenticated: 5000 req/hr → sync every 2h
+            sync_hours = 2 if self.github_token else 6
+
             self.scheduler.add_job(
                 func=self._automatic_full_sync,
-                trigger=IntervalTrigger(hours=2),
+                trigger=IntervalTrigger(hours=sync_hours),
                 id='auto_sync_job',
                 name='Automatic Full Sync',
                 replace_existing=True
@@ -892,12 +1000,13 @@ class GitHubSyncService:
             
             # Start the scheduler
             self.scheduler.start()
-            logger.info("Automatic sync scheduler started - running every 2 hours")
+            auth_mode = "authenticated" if self.github_token else "unauthenticated (60 req/hr)"
+            logger.info(f"Automatic sync scheduler started - syncing every {sync_hours}h ({auth_mode})")
         except Exception as e:
             logger.error(f"Error setting up automatic sync: {e}")
     
     def _automatic_full_sync(self):
-        """Perform automatic full sync (called by scheduler)"""
+        """Perform automatic full sync, skipping repos when rate budget is low."""
         try:
             session_id = str(uuid4())
             logger.info(f"Starting automatic full sync - Session ID: {session_id}")
@@ -905,11 +1014,22 @@ class GitHubSyncService:
             repositories = self.get_repositories()
             total_success = 0
             total_errors = 0
+            total_skipped = 0
             
             for repo in repositories:
                 repo_name = repo['repo']
+
+                # Check rate budget before each repo (need ~2 calls: issues + PRs)
+                if self._is_rate_limited():
+                    remaining = len(repositories) - total_success - total_errors - total_skipped
+                    logger.warning(
+                        f"Rate limit nearly exhausted — skipping {remaining} remaining repos. "
+                        f"They will be synced in the next cycle."
+                    )
+                    total_skipped += remaining
+                    break
+
                 try:
-                    # Sync both issues and PRs
                     issues_result = self.sync_repository_issues(repo_name, session_id)
                     prs_result = self.sync_repository_prs(repo_name, session_id)
                     
@@ -922,7 +1042,10 @@ class GitHubSyncService:
                     logger.error(f"Error syncing {repo_name} in automatic sync: {e}")
                     total_errors += 1
             
-            logger.info(f"Automatic sync completed - Session ID: {session_id}, Success: {total_success}, Errors: {total_errors}")
+            logger.info(
+                f"Automatic sync completed - Session ID: {session_id}, "
+                f"Success: {total_success}, Errors: {total_errors}, Skipped: {total_skipped}"
+            )
             
         except Exception as e:
             logger.error(f"Error in automatic sync: {e}")
@@ -1308,7 +1431,7 @@ class GitHubSyncService:
 
             logger.info(f"GitHub API request params: {params}")
 
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response = self._github_get(url, headers=headers, params=params)
 
             if response.status_code == 304:
                 logger.info(f"No new issues for {repo_name} since {last_sync_iso}")
@@ -1512,7 +1635,7 @@ class GitHubSyncService:
             
             logger.info(f"GitHub API request params for PRs: {params}")
             
-            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response = self._github_get(url, headers=headers, params=params)
 
             if response.status_code == 304:
                 logger.info(f"No new pull requests for {repo_name} since {last_sync_iso}")
@@ -1935,7 +2058,8 @@ def health_check():
         "status": "healthy",
         "service": "github-sync-service",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "requests_available": requests is not None
+        "requests_available": requests is not None,
+        "rate_limit": sync_service.get_rate_limit_info()
     })
 
 @app.route('/api/repositories', methods=['GET'])

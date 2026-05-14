@@ -43,6 +43,20 @@ def _make_service(db_path=None):
     return svc
 
 
+def _mock_github_response(status_code=200, json_data=None, headers=None):
+    """Build a mock HTTP response with rate-limit headers that _github_get expects."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = json_data if json_data is not None else []
+    resp.raise_for_status = MagicMock()
+    # Provide realistic rate-limit headers so _update_rate_limit parses cleanly
+    default_headers = {'X-RateLimit-Remaining': '55', 'X-RateLimit-Reset': '9999999999'}
+    if headers:
+        default_headers.update(headers)
+    resp.headers = default_headers
+    return resp
+
+
 # =========================================================================
 # Base class for Flask endpoint tests (shared test client, uses module DB)
 # =========================================================================
@@ -529,12 +543,10 @@ class TestRepositoryFiltersService(TestServiceBase):
 class TestSyncIssues(TestServiceBase):
     """Test sync_repository_issues with mocked GitHub API responses."""
 
+    @patch('app.time.sleep')
     @patch('app.requests')
-    def test_sync_issues_success(self, mock_requests):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = [
+    def test_sync_issues_success(self, mock_requests, _sleep):
+        mock_response = _mock_github_response(200, [
             {
                 'number': 1, 'title': 'Bug report', 'html_url': 'https://github.com/test/repo/issues/1',
                 'created_at': '2024-01-01T00:00:00Z', 'updated_at': '2024-06-01T00:00:00Z',
@@ -542,7 +554,7 @@ class TestSyncIssues(TestServiceBase):
                 'assignees': [], 'assignee': None, 'comments': 2,
                 'user': {'login': 'testuser', 'avatar_url': 'https://example.com/avatar.png'},
             }
-        ]
+        ])
         mock_requests.get.return_value = mock_response
 
         result = self.svc.sync_repository_issues('test/repo')
@@ -550,28 +562,24 @@ class TestSyncIssues(TestServiceBase):
         self.assertEqual(result['issues_new'], 1)
         mock_requests.get.assert_called_once()
 
+    @patch('app.time.sleep')
     @patch('app.requests')
-    def test_sync_issues_304_not_modified(self, mock_requests):
-        # Seed a prior sync timestamp
+    def test_sync_issues_304_not_modified(self, mock_requests, _sleep):
         self.svc._update_sync_metadata(
             repository='test/repo', sync_type='issues', status='success',
             items_synced=0, last_synced_at='2024-01-01T00:00:00Z',
         )
-        mock_response = MagicMock()
-        mock_response.status_code = 304
-        mock_requests.get.return_value = mock_response
+        mock_requests.get.return_value = _mock_github_response(304)
 
         result = self.svc.sync_repository_issues('test/repo')
         self.assertTrue(result['success'])
         self.assertEqual(result['issues_synced'], 0)
 
+    @patch('app.time.sleep')
     @patch('app.requests')
-    def test_sync_issues_filters_pull_requests(self, mock_requests):
+    def test_sync_issues_filters_pull_requests(self, mock_requests, _sleep):
         """Items with a 'pull_request' key should be filtered out of issue sync."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = [
+        mock_response = _mock_github_response(200, [
             {
                 'number': 10, 'title': 'PR disguised as issue',
                 'html_url': 'https://github.com/test/repo/pull/10',
@@ -581,15 +589,16 @@ class TestSyncIssues(TestServiceBase):
                 'user': {'login': 'u', 'avatar_url': 'https://example.com/a.png'},
                 'pull_request': {'url': 'https://api.github.com/repos/test/repo/pulls/10'},
             }
-        ]
+        ])
         mock_requests.get.return_value = mock_response
 
         result = self.svc.sync_repository_issues('test/repo')
         self.assertTrue(result['success'])
         self.assertEqual(result['issues_new'], 0)
 
+    @patch('app.time.sleep')
     @patch('app.requests')
-    def test_sync_issues_api_error(self, mock_requests):
+    def test_sync_issues_api_error(self, mock_requests, _sleep):
         mock_requests.get.side_effect = Exception('Connection timeout')
         result = self.svc.sync_repository_issues('test/repo')
         self.assertFalse(result['success'])
@@ -605,12 +614,10 @@ class TestSyncIssues(TestServiceBase):
 class TestSyncPRs(TestServiceBase):
     """Test sync_repository_prs with mocked GitHub API responses."""
 
+    @patch('app.time.sleep')
     @patch('app.requests')
-    def test_sync_prs_success(self, mock_requests):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json.return_value = [
+    def test_sync_prs_success(self, mock_requests, _sleep):
+        mock_response = _mock_github_response(200, [
             {
                 'number': 42, 'title': 'Add feature', 'html_url': 'https://github.com/test/repo/pull/42',
                 'created_at': '2024-01-01T00:00:00Z', 'updated_at': '2024-06-01T00:00:00Z',
@@ -620,29 +627,29 @@ class TestSyncPRs(TestServiceBase):
                 'base': {'ref': 'main'}, 'head': {'ref': 'feature-branch'},
                 'user': {'login': 'dev', 'avatar_url': 'https://example.com/a.png'},
             }
-        ]
+        ])
         mock_requests.get.return_value = mock_response
 
         result = self.svc.sync_repository_prs('test/repo')
         self.assertTrue(result['success'])
         self.assertEqual(result['prs_new'], 1)
 
+    @patch('app.time.sleep')
     @patch('app.requests')
-    def test_sync_prs_304_not_modified(self, mock_requests):
+    def test_sync_prs_304_not_modified(self, mock_requests, _sleep):
         self.svc._update_sync_metadata(
             repository='test/repo', sync_type='pull_requests', status='success',
             items_synced=0, last_synced_at='2024-01-01T00:00:00Z',
         )
-        mock_response = MagicMock()
-        mock_response.status_code = 304
-        mock_requests.get.return_value = mock_response
+        mock_requests.get.return_value = _mock_github_response(304)
 
         result = self.svc.sync_repository_prs('test/repo')
         self.assertTrue(result['success'])
         self.assertEqual(result['prs_synced'], 0)
 
+    @patch('app.time.sleep')
     @patch('app.requests')
-    def test_sync_prs_api_error(self, mock_requests):
+    def test_sync_prs_api_error(self, mock_requests, _sleep):
         mock_requests.get.side_effect = Exception('Network error')
         result = self.svc.sync_repository_prs('test/repo')
         self.assertFalse(result['success'])
@@ -652,6 +659,71 @@ class TestSyncPRs(TestServiceBase):
     def test_sync_prs_no_requests_module(self):
         result = self.svc.sync_repository_prs('test/repo')
         self.assertFalse(result['success'])
+
+
+class TestRateLimiting(TestServiceBase):
+    """Test rate-limit tracking, ETag caching, and backoff behaviour."""
+
+    def test_update_rate_limit_parses_headers(self):
+        resp = _mock_github_response(200, headers={
+            'X-RateLimit-Remaining': '42',
+            'X-RateLimit-Reset': '1700000000',
+        })
+        self.svc._update_rate_limit(resp)
+        self.assertEqual(self.svc._rate_limit_remaining, 42)
+        self.assertEqual(self.svc._rate_limit_reset, 1700000000.0)
+
+    def test_is_rate_limited_when_below_floor(self):
+        self.svc._rate_limit_remaining = 3  # below default floor of 5
+        self.assertTrue(self.svc._is_rate_limited())
+
+    def test_not_rate_limited_when_above_floor(self):
+        self.svc._rate_limit_remaining = 20
+        self.assertFalse(self.svc._is_rate_limited())
+
+    def test_not_rate_limited_when_unknown(self):
+        self.svc._rate_limit_remaining = None
+        self.assertFalse(self.svc._is_rate_limited())
+
+    def test_get_rate_limit_info(self):
+        self.svc._rate_limit_remaining = 55
+        self.svc._rate_limit_reset = None
+        info = self.svc.get_rate_limit_info()
+        self.assertEqual(info['remaining'], 55)
+        self.assertFalse(info['is_rate_limited'])
+        self.assertFalse(info['authenticated'])
+
+    @patch('app.time.sleep')
+    @patch('app.requests')
+    def test_github_get_stores_etag(self, mock_requests, _sleep):
+        resp = _mock_github_response(200, headers={'ETag': '"abc123"'})
+        mock_requests.get.return_value = resp
+        self.svc._github_get('https://api.github.com/repos/o/r/issues', {}, {'per_page': 100})
+        self.assertTrue(any('"abc123"' in v for v in self.svc._etag_cache.values()))
+
+    @patch('app.time.sleep')
+    @patch('app.requests')
+    def test_github_get_sends_etag_on_second_call(self, mock_requests, _sleep):
+        resp = _mock_github_response(200, headers={'ETag': '"xyz"'})
+        mock_requests.get.return_value = resp
+        url = 'https://api.github.com/repos/o/r/issues'
+        params = {'per_page': 100}
+        self.svc._github_get(url, {}, params)
+        # Second call should send If-None-Match
+        self.svc._github_get(url, {}, params)
+        _, kwargs = mock_requests.get.call_args
+        self.assertEqual(kwargs['headers'].get('If-None-Match'), '"xyz"')
+
+    @patch('app.time.sleep')
+    @patch('app.requests')
+    def test_github_get_retries_on_429(self, mock_requests, _sleep):
+        rate_limited = _mock_github_response(429, headers={'Retry-After': '1'})
+        ok_resp = _mock_github_response(200, json_data=[{'id': 1}])
+        mock_requests.get.side_effect = [rate_limited, ok_resp]
+
+        result = self.svc._github_get('https://api.github.com/test', {}, {})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(mock_requests.get.call_count, 2)
 
 
 class TestValidateRepository(TestServiceBase):
