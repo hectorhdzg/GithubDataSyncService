@@ -2,7 +2,10 @@
 """
 Database Schema Setup Script
 
-Creates the database and all required tables/schema for the GitHub Sync Service.
+Creates the database and all required tables/indexes for the GitHub Sync Service.
+The schema here mirrors app.py's _init_database exactly so that either path
+(setup script first, or cold-start via the app) produces the same result.
+
 Run this FIRST before starting the application.
 """
 
@@ -20,6 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_DATABASE_PATH = (BASE_DIR / 'data' / 'github_issues.db').resolve()
 DATABASE_PATH = os.getenv('DATABASE_PATH', str(DEFAULT_DATABASE_PATH))
 
+
 def ensure_database_directory():
     """Ensure the database directory exists"""
     db_dir = Path(DATABASE_PATH).parent
@@ -27,31 +31,32 @@ def ensure_database_directory():
         db_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Created database directory: {db_dir}")
 
+
 def create_database_schema():
-    """Create all required database tables and schema"""
+    """Create all required database tables and indexes.
+
+    This must stay in sync with GitHubSyncService._init_database in src/app.py.
+    """
     ensure_database_directory()
-    
-    # Check if database already exists
+
     db_exists = os.path.exists(DATABASE_PATH)
     if db_exists:
         logger.info(f"Database already exists at: {DATABASE_PATH}")
     else:
         logger.info(f"Creating new database at: {DATABASE_PATH}")
-    
+
     conn = sqlite3.connect(DATABASE_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
     cursor = conn.cursor()
-    
-    # Check if repositories table exists
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='repositories'")
-    table_exists = cursor.fetchone() is not None
-    
-    # Create repositories table
+
+    # ── repositories ─────────────────────────────────────────────────────
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS repositories (
             repo TEXT PRIMARY KEY,
             display_name TEXT NOT NULL,
             main_category TEXT NOT NULL,
             classification TEXT NOT NULL,
+            language_group TEXT DEFAULT 'Other',
             priority INTEGER NOT NULL,
             is_active BOOLEAN DEFAULT 1,
             filters TEXT DEFAULT '{}',
@@ -59,16 +64,9 @@ def create_database_schema():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    if table_exists:
-        logger.info("✅ Repositories table already exists")
-    else:
-        logger.info("✅ Created repositories table")
-    
-    # Check if issues table exists
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='issues'")
-    issues_exists = cursor.fetchone() is not None
-    
-    # Create issues table
+    logger.info("✅ repositories table ready")
+
+    # ── issues ───────────────────────────────────────────────────────────
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS issues (
             id INTEGER PRIMARY KEY,
@@ -79,33 +77,24 @@ def create_database_schema():
             created_at TIMESTAMP,
             updated_at TIMESTAMP,
             closed_at TIMESTAMP,
-            user_login TEXT,
-            user_type TEXT,
-            assignee_login TEXT,
-            assignee_type TEXT,
+            repo TEXT,
+            html_url TEXT,
             labels TEXT,
             assignees TEXT,
-            milestone_title TEXT,
-            milestone_state TEXT,
-            repo TEXT,
+            milestone TEXT,
+            repository TEXT,
             url TEXT,
-            html_url TEXT,
+            assignee_login TEXT,
+            user_login TEXT,
             user_avatar_url TEXT,
             comments_count INTEGER DEFAULT 0,
             comments INTEGER DEFAULT 0,
-            UNIQUE(repo, number)
+            UNIQUE(id)
         )
     ''')
-    if issues_exists:
-        logger.info("✅ Issues table already exists")
-    else:
-        logger.info("✅ Created issues table")
+    logger.info("✅ issues table ready")
 
-    # Check if pull_requests table exists
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pull_requests'")
-    prs_exists = cursor.fetchone() is not None
-    
-    # Create pull_requests table
+    # ── pull_requests ────────────────────────────────────────────────────
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS pull_requests (
             id INTEGER PRIMARY KEY,
@@ -117,42 +106,43 @@ def create_database_schema():
             updated_at TIMESTAMP,
             closed_at TIMESTAMP,
             merged_at TIMESTAMP,
-            user_login TEXT,
-            user_type TEXT,
-            assignee_login TEXT,
-            assignee_type TEXT,
-            labels TEXT,
-            assignees TEXT,
-            milestone_title TEXT,
-            milestone_state TEXT,
             repo TEXT,
             url TEXT,
             html_url TEXT,
+            labels TEXT,
+            assignees TEXT,
+            assignee_login TEXT,
+            assignee_type TEXT,
+            milestone TEXT,
+            repository TEXT,
+            user_login TEXT,
             user_avatar_url TEXT,
             draft BOOLEAN DEFAULT 0,
             merged BOOLEAN DEFAULT 0,
             base_ref TEXT,
             head_ref TEXT,
             comments_count INTEGER DEFAULT 0,
-            review_comments_count INTEGER DEFAULT 0,
-            commits_count INTEGER DEFAULT 0,
-            additions INTEGER DEFAULT 0,
-            deletions INTEGER DEFAULT 0,
-            changed_files INTEGER DEFAULT 0,
             comments INTEGER DEFAULT 0,
-            UNIQUE(repo, number)
+            UNIQUE(id)
         )
     ''')
-    if prs_exists:
-        logger.info("✅ Pull requests table already exists")
-    else:
-        logger.info("✅ Created pull_requests table")
+    logger.info("✅ pull_requests table ready")
 
-    # Check if sync_history table exists
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_history'")
-    sync_exists = cursor.fetchone() is not None
-    
-    # Create comprehensive sync history table
+    # ── sync_metadata ────────────────────────────────────────────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sync_metadata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sync_type TEXT,
+            repository TEXT,
+            last_sync TIMESTAMP,
+            status TEXT,
+            items_synced INTEGER DEFAULT 0,
+            error_message TEXT
+        )
+    ''')
+    logger.info("✅ sync_metadata table ready")
+
+    # ── sync_history ─────────────────────────────────────────────────────
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sync_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,37 +162,47 @@ def create_database_schema():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    if sync_exists:
-        logger.info("✅ Sync history table already exists")
-    else:
-        logger.info("✅ Created sync_history table")
-    
-    # Create indexes for better performance
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_issues_repo_number ON issues(repo, number)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_issues_updated_at ON issues(updated_at)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_prs_repo_number ON pull_requests(repo, number)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_prs_updated_at ON pull_requests(updated_at)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_sync_history_date ON sync_history(sync_date)')
+    logger.info("✅ sync_history table ready")
+
+    # ── repository_labels ────────────────────────────────────────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS repository_labels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repository TEXT NOT NULL,
+            name TEXT NOT NULL,
+            color TEXT,
+            description TEXT,
+            fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    logger.info("✅ repository_labels table ready")
+
+    # ── indexes ──────────────────────────────────────────────────────────
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_sync_history_date ON sync_history(sync_date DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_sync_history_session ON sync_history(sync_session_id)')
-    logger.info("✅ Created database indexes")
-    
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_sync_history_repo ON sync_history(repository)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_repository_labels_repo ON repository_labels(repository)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_repository_labels_repo_name ON repository_labels(repository, name)')
+    logger.info("✅ indexes ready")
+
     conn.commit()
     conn.close()
-    
-    if db_exists:
-        logger.info("🎉 Database schema verification completed - all tables exist!")
-    else:
-        logger.info("🎉 Database schema setup completed successfully!")
+
+    logger.info("🎉 Database schema setup completed successfully!")
+
 
 def main():
     """Main setup function"""
     try:
         logger.info("Setting up GitHub Sync Service database schema...")
         create_database_schema()
-        logger.info("Database schema setup completed!")
     except Exception as e:
-        logger.error(f"Database setup failed: {e}")
+        logger.error(f"Schema setup failed: {e}")
         raise
+
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()

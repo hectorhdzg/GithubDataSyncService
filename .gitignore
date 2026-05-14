@@ -1,3 +1,14 @@
+# Database
 /data/github_issues.db
 /data/*.db
 /data/*.log
+
+# Test output
+test_*.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+setup/data/sync-service.log

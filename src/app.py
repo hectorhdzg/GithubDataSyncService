@@ -12,9 +12,8 @@ import json
 import sqlite3
 import logging
 from logging.handlers import RotatingFileHandler
-import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from email.utils import format_datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
@@ -98,6 +97,17 @@ CORS(app)  # Enable CORS for all routes
 class GitHubSyncService:
     """Service for synchronizing GitHub data"""
 
+    # Default SQLite busy timeout in seconds.  Prevents "database is locked"
+    # errors when the background scheduler and API handlers access the DB
+    # concurrently.
+    _DB_TIMEOUT = 10
+
+    def _connect_db(self) -> sqlite3.Connection:
+        """Return a new SQLite connection with a sensible busy timeout."""
+        conn = sqlite3.connect(self.database_path, timeout=self._DB_TIMEOUT)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
     def __init__(self, database_path: str):
         self.database_path = database_path
         self.base_url = "https://api.github.com"
@@ -179,7 +189,7 @@ class GitHubSyncService:
     def _get_last_sync_timestamp(self, repository: str, sync_type: str) -> Optional[str]:
         """Return the last recorded sync timestamp for the repository/type in ISO format."""
         try:
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
@@ -205,7 +215,7 @@ class GitHubSyncService:
     ) -> None:
         """Upsert sync metadata so future runs can request only new data."""
         try:
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
@@ -328,7 +338,7 @@ class GitHubSyncService:
     
     def _init_database(self):
         """Initialize database schema"""
-        conn = sqlite3.connect(self.database_path)
+        conn = self._connect_db()
         cursor = conn.cursor()
         
         # Create repositories table with updated schema
@@ -363,8 +373,6 @@ class GitHubSyncService:
         # Add sample repositories if table is empty
         cursor.execute("SELECT COUNT(*) FROM repositories")
         if cursor.fetchone()[0] == 0:
-            import json
-            
             # Define filter configurations for different repository types
             azure_sdk_filters = {
                 "issues": {
@@ -587,7 +595,7 @@ class GitHubSyncService:
     def get_repository_filters(self, repository: str) -> dict:
         """Get filter configuration for a specific repository"""
         try:
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -596,7 +604,6 @@ class GitHubSyncService:
             conn.close()
             
             if result and result['filters']:
-                import json
                 return json.loads(result['filters'])
             
             # Return default filters if none configured
@@ -613,7 +620,7 @@ class GitHubSyncService:
 
     def _get_cached_labels(self, repository: str) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         """Return cached labels and their last fetched timestamp for a repository."""
-        conn = sqlite3.connect(self.database_path)
+        conn = self._connect_db()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT name, color, description, fetched_at FROM repository_labels WHERE repository = ? ORDER BY name",
@@ -680,7 +687,7 @@ class GitHubSyncService:
 
             fetched_iso = datetime.utcnow().isoformat()
 
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM repository_labels WHERE repository = ?", (repository,))
             for label in labels:
@@ -801,7 +808,7 @@ class GitHubSyncService:
                           duration_seconds: int = 0, status: str = 'success', error_message: str = None):
         """Record detailed sync history for dashboard display"""
         try:
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             cursor = conn.cursor()
             
             cursor.execute('''
@@ -821,7 +828,7 @@ class GitHubSyncService:
     def get_sync_history(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Get recent sync history for dashboard display"""
         try:
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
@@ -1005,7 +1012,7 @@ class GitHubSyncService:
         include_filters: bool = False
     ) -> List[Dict[str, Any]]:
         """Return repositories with optional inactive entries and filter payloads."""
-        conn = sqlite3.connect(self.database_path)
+        conn = self._connect_db()
         cursor = conn.cursor()
 
         # Determine repository column names for legacy databases
@@ -1102,7 +1109,7 @@ class GitHubSyncService:
 
         conn = None
         try:
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             cursor = conn.cursor()
 
             # Check if repository already exists
@@ -1181,7 +1188,7 @@ class GitHubSyncService:
     def remove_repository(self, repo: str) -> Dict[str, Any]:
         """Remove a repository from the database"""
         try:
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             cursor = conn.cursor()
             
             # Check if repository exists
@@ -1211,7 +1218,7 @@ class GitHubSyncService:
     def update_repository(self, repo: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Update repository information"""
         try:
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             cursor = conn.cursor()
             
             # Check if repository exists
@@ -1357,7 +1364,7 @@ class GitHubSyncService:
 
             logger.info(f"Fetched {len(issues)} issues, {len(filtered_issues)} after filtering")
 
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             cursor = conn.cursor()
 
             issues_new = 0
@@ -1560,7 +1567,7 @@ class GitHubSyncService:
             logger.info(f"Fetched {len(prs_data)} PRs, {len(filtered_prs)} after filtering")
             
             # Store PRs in database using existing schema
-            conn = sqlite3.connect(self.database_path)
+            conn = self._connect_db()
             cursor = conn.cursor()
             
             prs_new = 0
@@ -1683,10 +1690,9 @@ class GitHubSyncService:
     
     def get_sync_status(self) -> Dict[str, Any]:
         """Get sync status for all repositories"""
-        conn = sqlite3.connect(self.database_path)
+        conn = self._connect_db()
         cursor = conn.cursor()
         
-        # Get sync status from sync_history table instead
         cursor.execute('''
             SELECT repository, sync_type, 
                    MAX(sync_date) as last_sync,
@@ -1701,35 +1707,15 @@ class GitHubSyncService:
         
         status_data = []
         for row in cursor.fetchall():
-            key, value, updated_at = row
-            # Parse the key to get repo and type
-            if '_issues_' in key:
-                repo = key.replace('_issues_last_sync', '').replace('_issues_count', '').replace('_issues_last_error', '')
-                sync_type = 'issues'
-                if '_last_sync' in key:
-                    status_type = 'last_sync'
-                elif '_count' in key:
-                    status_type = 'count'
-                else:
-                    status_type = 'error'
-            elif '_prs_' in key:
-                repo = key.replace('_prs_last_sync', '').replace('_prs_count', '').replace('_prs_last_error', '')
-                sync_type = 'prs'
-                if '_last_sync' in key:
-                    status_type = 'last_sync'
-                elif '_count' in key:
-                    status_type = 'count'
-                else:
-                    status_type = 'error'
-            else:
-                continue
-            
+            repository, sync_type, last_sync, issues_count, prs_count, status, error_message = row
             status_data.append({
+                'repository': repository,
                 'sync_type': sync_type,
-                'repository': repo,
-                'status_type': status_type,
-                'value': value,
-                'updated_at': updated_at
+                'last_sync': last_sync,
+                'issues_count': issues_count or 0,
+                'prs_count': prs_count or 0,
+                'status': status,
+                'error_message': error_message
             })
         
         conn.close()
@@ -1737,7 +1723,7 @@ class GitHubSyncService:
     
     def get_issues(self, repository: Optional[str] = None, state: Optional[str] = None, limit: int = 10000) -> List[Dict[str, Any]]:
         """Get issues from database with optional filtering"""
-        conn = sqlite3.connect(self.database_path)
+        conn = self._connect_db()
         cursor = conn.cursor()
         
         query = "SELECT * FROM issues"
@@ -1771,7 +1757,7 @@ class GitHubSyncService:
     
     def get_pull_requests(self, repository: Optional[str] = None, state: Optional[str] = None, limit: int = 10000) -> List[Dict[str, Any]]:
         """Get pull requests from database with optional filtering"""
-        conn = sqlite3.connect(self.database_path)
+        conn = self._connect_db()
         cursor = conn.cursor()
         
         query = "SELECT * FROM pull_requests"
@@ -1805,7 +1791,7 @@ class GitHubSyncService:
     
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics from the database"""
-        conn = sqlite3.connect(self.database_path)
+        conn = self._connect_db()
         cursor = conn.cursor()
         
         # Get repository count
@@ -1851,7 +1837,7 @@ class GitHubSyncService:
 
     def get_data_freshness(self) -> Dict[str, Any]:
         """Get data freshness information"""
-        conn = sqlite3.connect(self.database_path)
+        conn = self._connect_db()
         cursor = conn.cursor()
         
         # Get latest updates
@@ -2094,7 +2080,7 @@ def get_stats():
 def get_statistics():
     """Get dashboard statistics"""
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
+        conn = sqlite3.connect(DATABASE_PATH, timeout=10)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -2117,14 +2103,12 @@ def get_statistics():
         last_sync = None
         if last_sync_raw:
             try:
-                from datetime import datetime, timezone, timedelta
                 # Parse the SQLite timestamp - SQLite CURRENT_TIMESTAMP is UTC
                 # But our database might be storing local time, so let's handle both cases
                 local_dt = datetime.fromisoformat(last_sync_raw.replace('Z', ''))
                 
                 # Since SQLite CURRENT_TIMESTAMP uses local time, treat it as local and convert to UTC
                 # Get the current local timezone offset
-                import time
                 is_dst = time.daylight and time.localtime().tm_isdst > 0
                 offset = - (time.altzone if is_dst else time.timezone)
                 
@@ -2288,14 +2272,13 @@ def get_repository_filters_api(repo_name):
 def update_repository_filters_api(repo_name):
     """Update filter configuration for a repository"""
     try:
-        import json
         data = request.get_json()
         filters = data.get('filters', {})
         
         # Validate JSON structure
         json.dumps(filters)  # This will raise an exception if not serializable
         
-        conn = sqlite3.connect(DATABASE_PATH)
+        conn = sqlite3.connect(DATABASE_PATH, timeout=10)
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -2320,13 +2303,7 @@ def update_repository_filters_api(repo_name):
 def create_sample_sync_history():
     """Create sample sync history data for testing"""
     try:
-        import uuid
-        
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        
-        # Create a sample sync session
-        session_id = str(uuid.uuid4())
+        session_id = str(uuid4())
         sample_syncs = [
             ('Azure/azure-sdk-for-python', 'full', 12, 8, 145, 5, 3, 67),
             ('Azure/azure-sdk-for-js', 'full', 8, 5, 98, 7, 2, 45),
@@ -2334,16 +2311,19 @@ def create_sample_sync_history():
         ]
         
         for repo, sync_type, issues_new, issues_updated, issues_total, prs_new, prs_updated, prs_total in sample_syncs:
-            cursor.execute('''
-                INSERT INTO sync_history 
-                (sync_session_id, repository, sync_type, issues_new, issues_updated, issues_total,
-                 prs_new, prs_updated, prs_total, duration_seconds, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (session_id, repo, sync_type, issues_new, issues_updated, issues_total,
-                  prs_new, prs_updated, prs_total, 45, 'success'))
-        
-        conn.commit()
-        conn.close()
+            sync_service.record_sync_history(
+                sync_session_id=session_id,
+                repository=repo,
+                sync_type=sync_type,
+                issues_new=issues_new,
+                issues_updated=issues_updated,
+                issues_total=issues_total,
+                prs_new=prs_new,
+                prs_updated=prs_updated,
+                prs_total=prs_total,
+                duration_seconds=45,
+                status='success'
+            )
         
         logger.info("Sample sync history created successfully")
         return jsonify({

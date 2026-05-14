@@ -1,0 +1,206 @@
+[
+    {
+        "repo": "Azure/azure-sdk-for-python",
+        "display_name": "Azure SDK for Python",
+        "main_category": "Azure SDK",
+        "classification": "Python",
+        "priority": 1,
+        "is_active": true,
+        "filters": {
+            "issues": {"labels": ["Monitor - Distro", "Monitor - Exporter", "Monitor - ApplicationInsights", "OpenTelemetry"], "state": "all"},
+            "pull_requests": {"labels": ["Monitor - Distro", "Monitor - Exporter", "Monitor - ApplicationInsights", "OpenTelemetry"], "state": "all"}
+        }
+    },
+    {
+        "repo": "Azure/azure-sdk-for-js",
+        "display_name": "Azure SDK for JavaScript",
+        "main_category": "Azure SDK",
+        "classification": "JavaScript",
+        "priority": 1,
+        "is_active": true,
+        "filters": {
+            "issues": {"labels": ["Monitor - Distro", "Monitor - Exporter", "Monitor - ApplicationInsights", "OpenTelemetry"], "state": "all"},
+            "pull_requests": {"labels": ["Monitor - Distro", "Monitor - Exporter", "Monitor - ApplicationInsights", "OpenTelemetry"], "state": "all"}
+        }
+    },
+    {
+        "repo": "Azure/azure-sdk-for-net",
+        "display_name": "Azure SDK for .NET",
+        "main_category": "Azure SDK",
+        "classification": "DotNet",
+        "priority": 1,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "open-telemetry/opentelemetry-js",
+        "display_name": "OpenTelemetry JavaScript",
+        "main_category": "OpenTelemetry",
+        "classification": "JavaScript",
+        "priority": 3,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "open-telemetry/opentelemetry-js-contrib",
+        "display_name": "OpenTelemetry JavaScript Contrib",
+        "main_category": "OpenTelemetry",
+        "classification": "JavaScript",
+        "priority": 3,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "open-telemetry/opentelemetry-python",
+        "display_name": "OpenTelemetry Python",
+        "main_category": "OpenTelemetry",
+        "classification": "Python",
+        "priority": 3,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "open-telemetry/opentelemetry-python-contrib",
+        "display_name": "OpenTelemetry Python Contrib",
+        "main_category": "OpenTelemetry",
+        "classification": "Python",
+        "priority": 3,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "open-telemetry/opentelemetry-dotnet",
+        "display_name": "OpenTelemetry .NET",
+        "main_category": "OpenTelemetry",
+        "classification": "DotNet",
+        "priority": 3,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/ApplicationInsights-node.js",
+        "display_name": "Application Insights Node.js",
+        "main_category": "Application Insights",
+        "classification": "JavaScript",
+        "priority": 2,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/ApplicationInsights-js",
+        "display_name": "Application Insights JavaScript",
+        "main_category": "Application Insights",
+        "classification": "JavaScript",
+        "priority": 2,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/applicationinsights-react-js",
+        "display_name": "Application Insights React",
+        "main_category": "Application Insights",
+        "classification": "JavaScript",
+        "priority": 2,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/applicationinsights-react-native",
+        "display_name": "Application Insights React Native",
+        "main_category": "Application Insights",
+        "classification": "JavaScript",
+        "priority": 2,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/applicationinsights-angularplugin-js",
+        "display_name": "Application Insights Angular",
+        "main_category": "Application Insights",
+        "classification": "JavaScript",
+        "priority": 2,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/DynamicProto-JS",
+        "display_name": "DynamicProto JavaScript",
+        "main_category": "Application Insights",
+        "classification": "JavaScript",
+        "priority": 2,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/node-diagnostic-channel",
+        "display_name": "Node Diagnostic Channel",
+        "main_category": "Application Insights",
+        "classification": "JavaScript",
+        "priority": 2,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/ApplicationInsights-node.js-native-metrics",
+        "display_name": "Application Insights Native Metrics",
+        "main_category": "Application Insights",
+        "classification": "JavaScript",
+        "priority": 2,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    },
+    {
+        "repo": "microsoft/ApplicationInsights-dotnet",
+        "display_name": "Application Insights .NET",
+        "main_category": "Application Insights",
+        "classification": "DotNet",
+        "priority": 2,
+        "is_active": true,
+        "filters": {
+            "issues": {"state": "all"},
+            "pull_requests": {"state": "all"}
+        }
+    }
+]
