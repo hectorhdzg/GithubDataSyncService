@@ -12,10 +12,13 @@ A Flask-based service that synchronizes GitHub issues and pull request metadata 
 ## Project structure
 - `src/app.py` – Flask application, sync logic, and API endpoints.
 - `data/` – Default location for the SQLite database (`github_issues.db`) and rotating log (`sync-service.log`).
+- `setup/setup.py` – Unified setup runner (schema + data in one step).
 - `setup/setup_database.py` – Creates or upgrades the database schema.
-- `setup/populate_repositories.py` – Seeds the repository table with Azure and OpenTelemetry projects.
+- `setup/populate_repositories.py` – Seeds the repository table from `setup/data/repositories.json`.
+- `setup/data/repositories.json` – Editable list of tracked repositories.
 - `src/ui/` – Static HTML/JS assets for the management console.
-- `tests/` – Basic regression tests and runner (`tests/run_tests.py`).
+- `tests/test_service.py` – 83 unit tests with mocked HTTP and isolated temp databases.
+- `check_history.py` – Quick CLI utility to print recent sync history.
 
 ## Prerequisites
 - Python 3.11 or newer (3.10 may work but is not validated).
@@ -25,9 +28,8 @@ A Flask-based service that synchronizes GitHub issues and pull request metadata 
 ## Quick start
 1. Create and activate a virtual environment:
   ```powershell
-  cd C:\Scripts\GithubDataSyncService
   python -m venv .venv
-  .\.venv\Scripts\Activate.ps1
+  .\.\.venv\Scripts\Activate.ps1
   ```
 2. Install dependencies:
   ```powershell
@@ -35,9 +37,9 @@ A Flask-based service that synchronizes GitHub issues and pull request metadata 
   ```
 3. Prepare the database:
   ```powershell
-  python setup\setup_database.py
-  python setup\populate_repositories.py
+  python setup\setup.py
   ```
+  This creates the schema and seeds the default repository list in one step. You can also run `python setup\setup.py --schema` or `--data` individually.
 4. Start the service:
   ```powershell
   python src\app.py
@@ -67,6 +69,7 @@ A Flask-based service that synchronizes GitHub issues and pull request metadata 
 - `DELETE /api/repositories/<owner/repo>` – Remove a repository and associated sync metadata.
 - `GET /api/repositories/<owner/repo>/filters` – Retrieve filter configuration.
 - `PUT /api/repositories/<owner/repo>/filters` – Replace filter configuration (expects serializable JSON under the `filters` key).
+- `GET /api/repositories/<owner/repo>/labels` – Get cached labels for a repository (pass `?force=true` to refresh from GitHub).
 
 ### Data retrieval
 - `GET /api/issues?repository=<owner/repo>&state=<state>&limit=<n>` – Return cached issues. Parameters are optional; `limit` defaults to 10000.
@@ -87,18 +90,20 @@ A Flask-based service that synchronizes GitHub issues and pull request metadata 
 
 ## Logging and data
 - Logs are stored in `data/sync-service.log` with rotation (10 MB per file, five backups).
-- SQLite tables include `repositories`, `issues`, `pull_requests`, `sync_history`, and `sync_metadata`.
+- SQLite tables include `repositories`, `issues`, `pull_requests`, `sync_history`, `sync_metadata`, and `repository_labels`.
 - Use `check_history.py` to print recent successful sync sessions from the database.
 
 ## Testing
-- Run the bundled tests:
+- Run the test suite with pytest:
   ```powershell
-  python tests\run_tests.py
+  python -m pytest tests/test_service.py -v
   ```
-- Tests create a temporary SQLite database, so they do not disturb your local data file.
+- 83 unit tests cover endpoints, sync logic, normalization, filtering, and scheduling.
+- All external HTTP calls are mocked; each test gets an isolated temporary database.
 
 ## Utilities
-- `setup/setup_database.py` and `setup/populate_repositories.py` are idempotent and safe to rerun for schema validation or reseeding.
+- All setup scripts (`setup/setup.py`, `setup_database.py`, `populate_repositories.py`) are idempotent and safe to rerun.
+- Edit `setup/data/repositories.json` to add or modify the list of tracked repositories before running setup.
 
 ## Deployment notes
 - Use a WSGI server such as Gunicorn in production (`gunicorn src.app:app`).
